@@ -1,0 +1,99 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: resilient-flashsale
+  
+  # In-memory Database H2 configuration
+  datasource:
+    url: jdbc:h2:mem:flashsale_db;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: 
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 30000
+      connection-timeout: 3000
+      max-lifetime: 1800000
+
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    defer-datasource-initialization: true
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  # Redis Configuration
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2000ms
+      connect-timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 50
+          max-idle: 20
+          min-idle: 5
+          max-wait: 1000ms
+
+  # Cache configuration
+  cache:
+    type: redis
+    redis:
+      time-to-live: 3600000 # 1 hour default TTL
+      cache-null-values: false
+
+# Flash Sale Custom Configuration
+flash-sale:
+  cache:
+    base-ttl-seconds: 3600 # 1 hour
+    max-jitter-seconds: 600 # 10 minutes random jitter to prevent mass expiration
+
+# Resilience4j Configuration
+resilience4j:
+  # Circuit Breaker bảo vệ khi Redis gặp sự cố
+  circuitbreaker:
+    instances:
+      redisCircuitBreaker:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 5
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - org.springframework.data.redis.RedisConnectionFailureException
+          - io.lettuce.core.RedisException
+          - java.net.ConnectException
+
+  # Rate Limiter giới hạn tải fallback xuống Database ở mức an toàn
+  ratelimiter:
+    instances:
+      dbRateLimiter:
+        limit-for-period: 200 # Tối đa 200 requests / giây xuống DB khi Redis sập
+        limit-refresh-period: 1s
+        timeout-duration: 20ms # Chặn nhanh (Fast-fail) nếu hết quota để bảo vệ luồng
+
+# Management & Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers,ratelimiters
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.flashsale.resilient: INFO
+    org.springframework.cache: DEBUG
